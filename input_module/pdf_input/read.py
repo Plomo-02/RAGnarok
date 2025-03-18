@@ -1,6 +1,6 @@
 import PyPDF2
 import nest_asyncio
-
+import os
 nest_asyncio.apply()
 
 from llama_parse import LlamaParse
@@ -12,14 +12,15 @@ class ExtractorManager:
     def __init__(self,input_path): 
         self.input_path = input_path
 
-    def extract_text_from_pdf(self,pdf_path):
-        with open(pdf_path, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            text = ''
-            for page in reader.pages:
-                text += page.extract_text()
-        with open('temp.txt', 'w') as file:
-            file.write(text)
+    def extract_text_from_pdf(self):
+        for x,file_pdf in enumerate(os.listdir(self.input_path)):
+            with open(file_pdf, 'rb') as file:
+                reader = PyPDF2.PdfReader(file)
+                text = ''
+                for page in reader.pages:
+                    text += page.extract_text()
+            with open(f'temp_{x}.txt', 'w') as file:
+                file.write(text)
 
 
     def extract_text_llama(input_path):
@@ -33,10 +34,10 @@ class ExtractorManager:
         documents = SimpleDirectoryReader(#da cambiare la directory di input 
             input_path, file_extractor=file_extractor
         ).load_data()
-
-        with open(f"txt_input/llama_output{x}.txt", "w") as file:
-            for document in documents:
-                file.write(document.text + "\n\n")
+        for x in range(len(documents)):
+            with open(f"txt_input/llama_output{x}.txt", "w") as file:
+                for document in documents:
+                    file.write(document.text + "\n\n")
 
 
 def get_input_path():
