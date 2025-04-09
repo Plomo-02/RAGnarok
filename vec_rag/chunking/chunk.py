@@ -42,6 +42,8 @@ class ChunkManager:
                 with open(f"chunked_texts/chunked_{file}_{index}.txt", "w") as f:
                     f.write(chunk.page_content + "\n\n")
 
+                    
+
 
     
         
