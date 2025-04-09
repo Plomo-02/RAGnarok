@@ -43,10 +43,5 @@ class ChunkManager:
                     f.write(chunk.page_content + "\n\n")
 
 
-
-
-
-
-
     
         
