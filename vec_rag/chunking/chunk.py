@@ -9,6 +9,9 @@ import tiktoken # Importato per mostrare il conteggio dei token (opzionale per l
 import shutil
 import nltk
 import re 
+import numpy as np
+from langchain.schema.document import Document
+
 
 class ChunkManager:
     def __init__(self, chunk_size = 1000, chunk_overlap  = 0.2, breakpoint_threshold_type = "percentile"):
@@ -58,11 +61,140 @@ class ChunkManager:
                 length_function=len,
                 is_separator_regex=False
             )
-            naive_chunks = text_splitter.split_documents(documents)
-            for chunk in naive_chunks:
-                print(chunk.page_content+ "\n")
-                with open(f"chunked_texts/chunked_{file}_{index}.txt", "w") as f:
-                    f.write(chunk.page_content + "\n\n")
+            return text_splitter.split_documents(documents)
+
+    def _analyze_document_content(self, text: str) -> dict:
+        """Analizza il contenuto testuale per estrarre metriche utili."""
+        analysis = {
+            "char_count": 0,
+            "line_count": 0,
+            "paragraph_count": 0,
+            "sentence_count": 0,
+            "avg_line_length": 0,
+            "avg_paragraph_length": 0, # In caratteri
+            "avg_sentence_length": 0, # In caratteri
+            "sentence_length_std": 0, # Deviazione standard lunghezza frasi
+            "nltk_success": False,
+            "is_likely_prose": False,
+            "has_strong_paragraph_structure": False,
+        }
+        if not text or not isinstance(text, str) or len(text) < 50: # Ignora testi troppo corti
+            return analysis
+
+        analysis["char_count"] = len(text)
+
+        # Analisi Strutturale Base
+        lines = text.split('\n')
+        analysis["line_count"] = len(lines)
+        analysis["avg_line_length"] = analysis["char_count"] / analysis["line_count"] if analysis["line_count"] > 0 else 0
+        # Conta paragrafi come blocchi separati da almeno una linea vuota
+        paragraphs = re.split(r'\n\s*\n', text.strip()) # Split su una o più linee vuote
+        analysis["paragraph_count"] = len(paragraphs)
+        analysis["avg_paragraph_length"] = analysis["char_count"] / analysis["paragraph_count"] if analysis["paragraph_count"] > 0 else 0
+
+        # Heuristica per struttura a paragrafi forte (Threshold da affinare!)
+        paragraph_density = analysis["paragraph_count"] / analysis["line_count"] if analysis["line_count"] > 0 else 0
+        if paragraph_density > 0.04 and analysis["paragraph_count"] > 3 and analysis["avg_paragraph_length"] < 2000:
+             analysis["has_strong_paragraph_structure"] = True
+
+        # Analisi Linguistica (NLTK)
+        try:
+            sentences = nltk.sent_tokenize(text)
+            analysis["sentence_count"] = len(sentences)
+            if analysis["sentence_count"] > 1: # Ha senso calcolare solo se ci sono più frasi
+                sentence_lengths = [len(s) for s in sentences]
+                analysis["avg_sentence_length"] = np.mean(sentence_lengths)
+                analysis["sentence_length_std"] = np.std(sentence_lengths)
+                analysis["nltk_success"] = True
+
+                # Heuristica per prosa (Threshold da affinare!)
+                # Lunghezza media ragionevole e deviazione standard non ECCESSIVAMENTE alta
+                if 50 < analysis["avg_sentence_length"] < 1200 and analysis["sentence_length_std"] < analysis["avg_sentence_length"] * 1.5:
+                    analysis["is_likely_prose"] = True
+
+        except Exception as e:
+            print(f"Analysis: NLTK sentence tokenization failed during analysis: {e}.")
+            analysis["nltk_success"] = False
+
+        return analysis
+
+        
+    def _recommend_chunking_strategy(self, analysis: dict) -> str:
+        """Sceglie la strategia basandosi sui risultati dell'analisi."""
+
+        # 1. Priorità alla struttura a paragrafi se forte
+        if analysis["has_strong_paragraph_structure"]:
+            print("Analysis Recommendation: Strong paragraph structure detected -> 'section'")
+            return "section"
+
+        # 2. Se è prosa, considera Semantico o Sentence
+        if analysis["is_likely_prose"]:
+            # Preferisci semantico se richiesto e possibile?
+            if self.prefer_semantic_in_auto and self.openai_api_key_present:
+                    print("Analysis Recommendation: Prose detected, semantic preferred and possible -> 'semantic'")
+                    return "semantic"
+            else:
+                    # Altrimenti usa sentence (NLTK deve aver funzionato per is_likely_prose=True)
+                    print("Analysis Recommendation: Prose detected -> 'sentence'")
+                    return "sentence"
+
+        # 3. Fallback generico se non è prosa chiaramente strutturata o NLTK ha fallito
+        # Potresti aggiungere qui logica per rilevare codice/liste e usare recursive
+        print("Analysis Recommendation: No clear prose or paragraph structure detected -> 'recursive' (fallback)")
+        return "recursive"
+
+
+    def _automatic_chunking(self, documents: list[Document]) -> list[Document]:
+        """
+        Analizza il contenuto e applica automaticamente la strategia di chunking ritenuta migliore.
+        """
+        # Analizza un campione rappresentativo (es. i primi N documenti o i primi X caratteri totali)
+        representative_text = ""
+        chars_to_analyze = 5000 # Analizza fino a X caratteri
+        for doc in documents:
+            if doc.page_content and isinstance(doc.page_content, str):
+                representative_text += doc.page_content + "\n\n" # Aggiungi separatore tra pagine/doc
+                if len(representative_text) >= chars_to_analyze:
+                    break
+        representative_text = representative_text[:chars_to_analyze]
+
+        if not representative_text:
+             print("Automatic Chunking: No text content found to analyze. Falling back to recursive.")
+             return self._recursive_chunking(documents)
+
+        # Esegui l'analisi
+        analysis_results = self._analyze_document_content(representative_text)
+        # Stampa riassunto analisi (utile per debug)
+        print("\n--- Document Analysis Summary ---")
+        for key, value in analysis_results.items():
+             if isinstance(value, float):
+                 print(f"  {key}: {value:.2f}")
+             else:
+                 print(f"  {key}: {value}")
+        print("-----------------------------")
+
+
+        # Ottieni la strategia raccomandata
+        chosen_strategy = self._recommend_chunking_strategy(analysis_results)
+
+        print(f"\nAutomatic Chunking: Applying '{chosen_strategy}' strategy based on analysis...")
+
+        # Applica la strategia scelta
+        if chosen_strategy == "section":
+            # Usa il separatore di paragrafo standard
+            return self._section_chunking_by_separator(documents, separator="\n\n")
+        elif chosen_strategy == "sentence":
+             return self._sentence_aware_chunking(documents) # Già contiene fallback a recursive se NLTK fallisce
+        elif chosen_strategy == "semantic":
+             # Doppio controllo API Key qui è prudente
+             if not self.openai_api_key_present:
+                 print("Automatic Chunking Warning: Semantic recommended but API key missing. Falling back to sentence chunking.")
+                 return self._sentence_aware_chunking(documents) # Fallback a sentence (che a sua volta può fare fallback a recursive)
+             else:
+                 return self._semantic_chunking(documents)
+        else: # chosen_strategy == "recursive" o fallback inaspettato
+            return self._recursive_chunking(documents)
+
 
    
     def _sentence_aware_chunking(
@@ -209,9 +341,6 @@ class ChunkManager:
         return chunks
 
 
-    def _section_chunking():
-        import re
-
     def _section_chunking_by_separator(
         text: str,
         separator: str = "\n\n",
@@ -285,6 +414,10 @@ class ChunkManager:
         ]
 
         return final_chunks
+
+    def _count_tokens(self, text):
+        """Helper to count tokens."""
+        return len(self.tokenizer.encode(text))
 
     def chunk(self, type = "semantic", include_metadata = False):
         import tempfile
