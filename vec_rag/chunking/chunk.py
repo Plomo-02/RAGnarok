@@ -6,18 +6,70 @@ from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.text_splitter import TokenTextSplitter
 import tiktoken # Importato per mostrare il conteggio dei token (opzionale per lo split)
-import shutil
 import nltk
 import re 
 import numpy as np
 from langchain.schema.document import Document
+import inspect
+import logging
 
 
 class ChunkManager:
-    def __init__(self, chunk_size = 1000, chunk_overlap  = 0.2, breakpoint_threshold_type = "percentile"):
+    def __init__(self,  directory_path: str, chunk_size = 1000, chunk_overlap  = 0.2, breakpoint_threshold_type = "percentile",
+                 encoding_name = "cl100k_base",
+                 max_tokens_per_chunk = 256,
+                 verbose = False,
+                 overlap_sentences = 1,
+                 separator = "\n\n",
+                 min_chunk_size = 1):
+        #TODO : build document from reading the directory path
+        #TODO : cambiare i parametri delle funzioni prendendo quelli del costruttore 
+        #self.documents = self._build_documents(directory_path)
         self.breakpoint_threshold_type = breakpoint_threshold_type
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self._chunking_strategies = {
+            "semantic": self._semantic_chunking,
+            "recursive": self._recursive_chunking,
+            "fixed_size": self._fixed_size_chunking,
+            "separator": self._section_chunking_by_separator,
+            "sentence-aware": self._sentence_aware_chunking,
+        }
+
+    def check_args(self, function_type,**kwargs):
+        sig = inspect.signature(self._chunking_strategies[function_type])
+        required_params = [
+            name for name, param in sig.parameters.items()
+            if param.default == inspect.Parameter.empty  # Filtra solo i non-default
+            and param.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)  # Esclude *args e **kwargs
+        ]
+        target_function = self._chunking_strategies.get(function_type)
+        if not target_function:
+            raise ValueError(f"Tipo di funzione sconosciuto: '{function_type}'. Tipi validi: {list(self._chunking_strategies.keys())}")
+
+        sig = inspect.signature(target_function)
+        required_params = { # Usiamo un set per efficienza
+            name for name, param in sig.parameters.items()
+            if param.default == inspect.Parameter.empty
+            and param.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        }
+
+        logging.debug(f"Funzione '{function_type}': Firma parametri: {list(sig.parameters.keys())}")
+        logging.debug(f"Funzione '{function_type}': Parametri richiesti (signature): {required_params}")
+        logging.debug(f"Funzione '{function_type}': Parametri standard da ignorare: {self.standard_params}")
+
+        # Calcola quali parametri richiesti NON sono quelli standard (e quindi ci aspettiamo di trovarli in kwargs)
+        extra_required_params = required_params - self.standard_params
+
+        logging.debug(f"Funzione '{function_type}': Parametri extra richiesti (da trovare in kwargs): {extra_required_params}")
+        logging.debug(f"Kwargs forniti per il controllo: {kwargs.keys()}")
+
+
+        # Trova quali parametri extra richiesti mancano effettivamente nei kwargs forniti
+        provided_keys = set(kwargs.keys())
+        missing_params = extra_required_params - provided_keys
+
+
 
     def _semantic_chunking(self):
         # This is a long document we can split up.
@@ -143,8 +195,7 @@ class ChunkManager:
         print("Analysis Recommendation: No clear prose or paragraph structure detected -> 'recursive' (fallback)")
         return "recursive"
 
-
-    def _automatic_chunking(self, documents: list[Document]) -> list[Document]:
+    def _automatic_chunking(self, documents: list[Document], **kwargs) -> list[Document]:
         """
         Analizza il contenuto e applica automaticamente la strategia di chunking ritenuta migliore.
         """
@@ -179,22 +230,9 @@ class ChunkManager:
 
         print(f"\nAutomatic Chunking: Applying '{chosen_strategy}' strategy based on analysis...")
 
-        # Applica la strategia scelta
-        if chosen_strategy == "section":
-            # Usa il separatore di paragrafo standard
-            return self._section_chunking_by_separator(documents, separator="\n\n")
-        elif chosen_strategy == "sentence":
-             return self._sentence_aware_chunking(documents) # Già contiene fallback a recursive se NLTK fallisce
-        elif chosen_strategy == "semantic":
-             # Doppio controllo API Key qui è prudente
-             if not self.openai_api_key_present:
-                 print("Automatic Chunking Warning: Semantic recommended but API key missing. Falling back to sentence chunking.")
-                 return self._sentence_aware_chunking(documents) # Fallback a sentence (che a sua volta può fare fallback a recursive)
-             else:
-                 return self._semantic_chunking(documents)
-        else: # chosen_strategy == "recursive" o fallback inaspettato
-            return self._recursive_chunking(documents)
+        chunks = self._chunking_strategies[chosen_strategy](**kwargs)
 
+        return chunks 
 
    
     def _sentence_aware_chunking(
@@ -419,8 +457,10 @@ class ChunkManager:
         """Helper to count tokens."""
         return len(self.tokenizer.encode(text))
 
-    def chunk(self, type = "semantic", include_metadata = False):
+    def chunk(self, document: Document, directory_path: str, type = "semantic", include_metadata = False, separator = "\n\n"):
         import tempfile
+        #TODO: implementare la lettura della directory path passata come argomento 
+        #TODO: 
 
         temp_dir = tempfile.mkdtemp(prefix="chunked_texts_")
 
@@ -430,7 +470,13 @@ class ChunkManager:
             self._recursive_chunking()
         elif type == "fixed_size":
             self._fixed_size_chunking(self.chunk_size, self.chunk_overlap)
-        else:
+        elif type == "separator":
+            self._section_chunking_by_separator(separator)
+        elif type == "sentence-aware":
+            self._sentence_aware_chunking(text=document)
+        elif type == "automatic":
+            self._automatic_chunking(document)
+
 
             raise ValueError(f"Unknown chunking type: {type}")
         

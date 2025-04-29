@@ -1,0 +1,2 @@
+the user must be pass only the name of the strategy function and the path where are the documents on which build the rag
+and can pass the others default method 
