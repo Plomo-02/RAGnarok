@@ -22,9 +22,15 @@ class ChunkManager:
                  overlap_sentences = 1,
                  separator = "\n\n",
                  min_chunk_size = 1):
-        #TODO : build document from reading the directory path
+        #TODO : build documents from reading the directory path
         #TODO : cambiare i parametri delle funzioni prendendo quelli del costruttore 
-        #self.documents = self._build_documents(directory_path)
+        self.documents = self._build_documents(directory_path)
+        self.encoding_name = encoding_name
+        self.verbose = verbose
+        self.overlap_sentences = overlap_sentences
+        self.separator = separator
+        self.min_chunk_size = min_chunk_size
+        self.max_tokens_per_chunk = max_tokens_per_chunk
         self.breakpoint_threshold_type = breakpoint_threshold_type
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
@@ -101,15 +107,15 @@ class ChunkManager:
                 with open(f"chunked_texts/chunked_{file}_{index}.txt", "w") as f:
                     f.write(chunk.page_content + "\n\n")
 
-    def _fixed_size_chunking (self, chunk_size, chunk_overlap, encoding_name="cl100k_base"):
+    def _fixed_size_chunking (self):
         directory_input = get_input_path()
         for index,file in enumerate(os.listdir(directory_input)):
             loader = PyPDFLoader(file)
             documents = loader.load()
             text_splitter = TokenTextSplitter(
-                encoding_name=encoding_name,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
+                encoding_name=self.encoding_name,
+                chunk_size=self.chunk_size,
+                chunk_overlap=self.chunk_overlap,
                 length_function=len,
                 is_separator_regex=False
             )
@@ -234,15 +240,11 @@ class ChunkManager:
 
         return chunks 
 
+
    
-    def _sentence_aware_chunking(
-        text: str,
-        max_tokens_per_chunk: int = 256,
-        overlap_sentences: int = 1,
-        encoding_name: str = "cl100k_base",
-        verbose: bool = False
-    ) -> list[str]:
+    def _sentence_aware_chunking(self) -> list[str]:
         """
+
         Divide il testo in chunk rispettando i confini delle frasi.
 
         Args:
@@ -257,21 +259,23 @@ class ChunkManager:
         Returns:
             Una lista di stringhe, dove ogni stringa è un chunk di testo.
         """
+        self.chunk_overlap = 1
+        text =  documents.page_content
         if not isinstance(text, str) or not text.strip():
             return []
-        if max_tokens_per_chunk <= 0:
+        if self.max_tokens_per_chunk <= 0:
             raise ValueError("max_tokens_per_chunk deve essere positivo.")
-        if overlap_sentences < 0:
+        if self.overlap_sentences < 0:
             raise ValueError("overlap_sentences non può essere negativo.")
 
-        tokenizer = tiktoken.get_encoding(encoding_name)
+        tokenizer = tiktoken.get_encoding(self.encoding_name)
 
         # 1. Dividi in frasi
         sentences = nltk.sent_tokenize(text)
         if not sentences:
             return []
 
-        if verbose:
+        if self.verbose:
             print(f"Testo diviso in {len(sentences)} frasi.")
 
         chunks = []
@@ -379,11 +383,7 @@ class ChunkManager:
         return chunks
 
 
-    def _section_chunking_by_separator(
-        text: str,
-        separator: str = "\n\n",
-        min_chunk_size: int = 1  # Opzionale: ignora chunk molto piccoli
-    ) -> list[str]:
+    def _section_chunking_by_separator(self) -> list[str]:
         """
         Divide il testo in chunk basandosi su un separatore specificato.
 
@@ -400,9 +400,11 @@ class ChunkManager:
         Returns:
             Una lista di stringhe, dove ogni stringa è un chunk (sezione).
         """
+
+        text =  documents.page_content
         if not isinstance(text, str) or not text.strip():
             return []
-        if not isinstance(separator, str) or not separator:
+        if not isinstance(self.separator, str) or not self.separator:
             # Se il separatore non è valido, ritorna il testo intero come unico chunk
             # o solleva un errore, a seconda di come vuoi gestire il caso.
             # Qui lo trattiamo come un unico chunk se il testo non è vuoto.
@@ -414,7 +416,7 @@ class ChunkManager:
         # (anche se qui li stiamo rimuovendo, che è il comportamento di default di split).
         # Usare string.split(separator) è spesso sufficiente per separatori semplici.
         # chunks = text.split(separator)
-        chunks = re.split(f"({re.escape(separator)})", text) # re.split mantiene il separatore se catturato con ()
+        chunks = re.split(f"({re.escape(self.separator)})", text) # re.split mantiene il separatore se catturato con ()
                                                             # ma crea più elementi nella lista, quindi dobbiamo gestirlo
 
         # Ricostruiamo i chunk, rimuovendo gli spazi e filtrando quelli troppo piccoli
@@ -430,13 +432,13 @@ class ChunkManager:
 
                 # Finalizza il chunk corrente se non è vuoto e rispetta la dimensione minima
                 trimmed_chunk = current_chunk.strip()
-                if trimmed_chunk and len(trimmed_chunk) >= min_chunk_size:
+                if trimmed_chunk and len(trimmed_chunk) >= self.min_chunk_size:
                     processed_chunks.append(trimmed_chunk)
                 current_chunk = "" # Inizia un nuovo chunk virtuale dopo il separatore
 
         # Aggiungi l'ultimo pezzo di testo dopo l'ultimo separatore (o se non c'erano separatori)
         trimmed_last_chunk = current_chunk.strip()
-        if trimmed_last_chunk and len(trimmed_last_chunk) >= min_chunk_size:
+        if trimmed_last_chunk and len(trimmed_last_chunk) >= self.min_chunk_size:
             processed_chunks.append(trimmed_last_chunk)
 
         # Alternativa più semplice se non ti serve mantenere i separatori e re.split confonde:
@@ -444,11 +446,11 @@ class ChunkManager:
         # processed_chunks = [chunk.strip() for chunk in chunks_simple if chunk.strip() and len(chunk.strip()) >= min_chunk_size]
 
         # Scegliamo l'implementazione più semplice con string.split per minimalismo
-        chunks_simple = text.split(separator)
+        chunks_simple = text.split(self.separator)
         final_chunks = [
             chunk.strip()
             for chunk in chunks_simple
-            if chunk.strip() and len(chunk.strip()) >= min_chunk_size
+            if chunk.strip() and len(chunk.strip()) >= self.min_chunk_size
         ]
 
         return final_chunks
@@ -457,12 +459,12 @@ class ChunkManager:
         """Helper to count tokens."""
         return len(self.tokenizer.encode(text))
 
-    def chunk(self, document: Document, directory_path: str, type = "semantic", include_metadata = False, separator = "\n\n"):
+    def chunk(self, document: Document, type = "semantic", include_metadata = False, separator = "\n\n"):
         import tempfile
         #TODO: implementare la lettura della directory path passata come argomento 
         #TODO: 
+        document = self.documents
 
-        temp_dir = tempfile.mkdtemp(prefix="chunked_texts_")
 
         if type == "semantic":
             self._semantic_chunking()

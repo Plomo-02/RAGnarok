@@ -13,17 +13,18 @@ class ExtractorManager:
         self.input_path = input_path
 
     def extract_text_from_pdf(self):
-        for x,file_pdf in enumerate(os.listdir(self.input_path)):
+        for x, file_pdf in enumerate(os.listdir(self.input_path)):
+            file_pdf = os.path.join(self.input_path, file_pdf)
             with open(file_pdf, 'rb') as file:
                 reader = PyPDF2.PdfReader(file)
                 text = ''
                 for page in reader.pages:
                     text += page.extract_text()
-            with open(f'temp_{x}.txt', 'w') as file:
+            with open(f'temp_{x}.txt', 'w', encoding='UTF-8') as file:
                 file.write(text)
 
 
-    def extract_text_llama(input_path):
+    def extract_text_llama(self):
 
         parser = LlamaParse(
             result_type="markdown",  # "markdown" and "text" are available
@@ -32,7 +33,7 @@ class ExtractorManager:
 
         file_extractor = {".pdf": parser}
         documents = SimpleDirectoryReader(#da cambiare la directory di input 
-            input_path, file_extractor=file_extractor
+            self.input_path, file_extractor=file_extractor
         ).load_data()
         for x in range(len(documents)):
             with open(f"txt_input/llama_output{x}.txt", "w") as file:
@@ -59,8 +60,11 @@ def get_input_path():
     files_temp_path = rag_path / "frontend" / "temp"
     return files_temp_path
 
-
-   
+if __name__ == "__main__":
+    input_path = get_input_path()
+    extractor = ExtractorManager(input_path)
+    #extractor.extract_text_from_pdf()
+    extractor.extract_text_llama()
 
 
 
