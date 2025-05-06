@@ -202,22 +202,26 @@ class ExtractorManager:
             import traceback
             traceback.print_exc()
 
-    def _extract_ocr(self):
+    def _extract_ocr(self, file_pdf):
+        pass
+
+    def _validate_ocr_extraction(self, file_pdf):
         pass
 
     def _decide_extraction (self):
-        for x, file_pdf in enumerate(os.listdir(self.output_dir_path)):
+        for file_pdf in os.listdir(self.output_dir_path):
             with open(file_pdf, 'r') as file:
                 content = file.read()
-                if self._is_extracted_text_valid(content) is False:
-                    
-            
+            if self._is_extracted_text_valid(content) is False:
+                self._extract_ocr(file_pdf)
+                result = self._validate_ocr_extraction(file_pdf)
+                if result is False:
+                    self._extract_text_llama()
+                               
 
     def extract_text(self):
         
-
-
-        type_of_extr =  self.decide_extraction()
+        type_of_extr =  self._decide_extraction()
         if type_of_extr == "pdf":
             self._extract_text_from_pdf()
         elif type_of_extr == "llama":
